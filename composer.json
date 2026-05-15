@@ -1,0 +1,45 @@
+{
+    "name": "ephpm/cache-laravel",
+    "description": "Laravel Cache store backed by ePHPm's in-process KV store via the ephpm_kv_* SAPI functions — zero socket round-trips, auto-discovered service provider.",
+    "type": "library",
+    "license": "MIT",
+    "keywords": ["laravel", "cache", "ephpm", "kv", "sapi", "driver"],
+    "homepage": "https://ephpm.dev",
+    "support": {
+        "issues": "https://github.com/ephpm/cache-laravel/issues",
+        "source": "https://github.com/ephpm/cache-laravel"
+    },
+    "require": {
+        "php": "^8.2",
+        "illuminate/contracts": "^10.0 || ^11.0 || ^12.0",
+        "illuminate/support": "^10.0 || ^11.0 || ^12.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^8.0 || ^9.0 || ^10.0",
+        "phpunit/phpunit": "^10.5 || ^11.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Ephpm\\Cache\\Laravel\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Ephpm\\Cache\\Laravel\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Ephpm\\Cache\\Laravel\\EphpmCacheServiceProvider"
+            ]
+        }
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "scripts": {
+        "test": "phpunit"
+    },
+    "minimum-stability": "stable"
+}
