@@ -21,8 +21,14 @@ use Illuminate\Support\ServiceProvider;
  */
 final class EphpmCacheServiceProvider extends ServiceProvider
 {
-    public function register(): void
+    public function boot(): void
     {
+        // Register the custom driver in boot(), not register(): the
+        // `cache` manager this resolves is bound by the framework's own
+        // CacheServiceProvider, which may not have registered yet during
+        // this provider's register() phase (provider ordering is not
+        // guaranteed). Calling Cache::extend() there throws
+        // "Target class [cache] does not exist".
         Cache::extend('ephpm', function ($app, array $config): Repository {
             $store = new EphpmStore($config['prefix'] ?? '');
             return new Repository($store);

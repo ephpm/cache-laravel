@@ -113,14 +113,18 @@ final class EphpmStore implements Store
     }
 
     /**
-     * The SAPI doesn't expose key enumeration, so we can't drop all
-     * entries. Returns false so callers know flush() was a no-op;
-     * recommended pattern is to bump the prefix in config and let old
-     * entries age out via TTL. Documented in the README.
+     * Clear the entire effective KV store via the SAPI's
+     * `ephpm_kv_flush_all()` (ePHPm v0.1.2+), making `Cache::flush()` and
+     * `php artisan cache:clear` work. This drops *every* key in the store,
+     * not just this driver's prefix — matching how Laravel's RedisStore
+     * flushes the whole database. On pre-v0.1.2 runtimes the SAPI function
+     * is absent and this returns false (the guard in {@see SapiKvOps}); the
+     * fallback there is to bump the prefix in config and let old entries
+     * age out via TTL.
      */
     public function flush(): bool
     {
-        return false;
+        return $this->ops->flush();
     }
 
     public function getPrefix(): string

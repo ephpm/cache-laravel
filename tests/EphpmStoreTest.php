@@ -147,13 +147,15 @@ final class EphpmStoreTest extends TestCase
         self::assertSame([3], $store->get('c'));
     }
 
-    public function test_flush_returns_false(): void
+    public function test_flush_clears_all_entries(): void
     {
         $store = new EphpmStore('', new InMemoryKvOps());
-        $store->put('k', 'v', 60);
-        self::assertFalse($store->flush());
-        // The key remains; flush is documented as a no-op.
-        self::assertSame('v', $store->get('k'));
+        $store->put('a', 'one', 60);
+        $store->put('b', 'two', 60);
+        self::assertTrue($store->flush());
+        // Every key is gone — flush now drops the whole store via the SAPI.
+        self::assertNull($store->get('a'));
+        self::assertNull($store->get('b'));
     }
 
     public function test_prefix_is_honoured_by_every_method(): void
@@ -162,11 +164,15 @@ final class EphpmStoreTest extends TestCase
         $store = new EphpmStore('app1:', $ops);
 
         $store->put('k', 'v', 60);
-        self::assertSame('v', $ops->get('app1:k'));
+        // The store serializes non-numeric values before writing, so the
+        // raw KV holds the serialized form under the prefixed key. Read it
+        // back through the store to compare the logical value.
+        self::assertSame('v', $store->get('k'));
+        self::assertNotNull($ops->get('app1:k'));
         self::assertNull($ops->get('k'));
 
         $store->forever('f', 'forever-v');
-        self::assertSame('forever-v', $ops->get('app1:f'));
+        self::assertSame('forever-v', $store->get('f'));
 
         self::assertSame(1, $store->increment('counter'));
         self::assertSame('1', $ops->get('app1:counter'));
@@ -181,14 +187,12 @@ final class EphpmStoreTest extends TestCase
     {
         if (!\function_exists('ephpm_kv_get')) {
             // SapiKvOps refuses to construct without the SAPI present, so
-            // we can't fully resolve the store from the container here.
-            // What we *can* assert is that the closure was registered.
-            $manager = $this->app->make('cache');
-            $reflection = new \ReflectionObject($manager);
-            $method = $reflection->getMethod('getDriver');
+            // resolving the store from the container must throw. That this
+            // throws (rather than "driver not found") proves the closure
+            // was registered and reached SapiKvOps's constructor guard.
             $this->expectException(\RuntimeException::class);
             $this->expectExceptionMessage('ephpm KV SAPI functions are not available');
-            $manager->store('ephpm');
+            $this->app->make('cache')->store('ephpm');
             return;
         }
 
