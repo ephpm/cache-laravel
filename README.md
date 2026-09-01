@@ -43,7 +43,10 @@ path a Rust handler would take.
 - **PHP 8.2+**
 - **Laravel 10.x, 11.x, or 12.x** (`illuminate/contracts` and
   `illuminate/support` constraints are `^10.0 || ^11.0 || ^12.0`).
-- **The ePHPm runtime** — the global `ephpm_kv_*` SAPI functions are
+- **The ePHPm runtime, v0.1.2 or newer** (current release: v0.8.6).
+  The `ephpm_kv_*` SAPI functions have shipped since ePHPm v0.1.0, but
+  `ephpm_kv_flush_all()` — which backs `Cache::flush()` — arrived in
+  v0.1.2. The functions are
   registered by ePHPm's embedded PHP. If you're running your code
   under PHP-FPM, Apache mod_php, or the stock PHP CLI, those functions
   don't exist and `SapiKvOps::__construct()` throws on instantiation.
@@ -63,8 +66,14 @@ refuse to construct.
 
 ## Install
 
+ePHPm packages are distributed via their GitHub repositories, not
+Packagist. Add this repo as a Composer `vcs` repository, then require
+the package (`ephpm/cache-laravel` is tagged `v0.1.0`, so `^0.1`
+resolves):
+
 ```bash
-composer require ephpm/cache-laravel
+composer config repositories.ephpm/cache-laravel vcs https://github.com/ephpm/cache-laravel
+composer require ephpm/cache-laravel:^0.1
 ```
 
 Laravel package discovery picks up `EphpmCacheServiceProvider`
@@ -84,7 +93,8 @@ cache hit served from in-process memory.
 ```bash
 composer create-project laravel/laravel my-app
 cd my-app
-composer require ephpm/cache-laravel
+composer config repositories.ephpm/cache-laravel vcs https://github.com/ephpm/cache-laravel
+composer require ephpm/cache-laravel:^0.1
 ```
 
 ### 2. Add an `ephpm` store to `config/cache.php`
@@ -282,16 +292,19 @@ If this round-trips successfully you've confirmed:
 | `Cache::many`, `Cache::putMany`     | yes (loops `get`/`put`) |
 | `Cache::has`, `Cache::missing`      | yes                |
 | `Cache::add`                        | yes (via `Repository`) |
+| `Cache::flush` / `artisan cache:clear` | yes (ePHPm v0.1.2+, via `ephpm_kv_flush_all()`) |
 | `RateLimiter` / throttle middleware | yes                |
 | Session driver = `cache` (with this store as default) | yes  |
 
 ### Limitations
 
-- **`Cache::flush()` returns `false`.** The SAPI doesn't expose key
-  enumeration, so we can't drop all entries. The recommended pattern
-  is to bump the `prefix` in `config/cache.php` and let the old keys
-  age out via TTL — or to track invalidation explicitly with versioned
-  keys (`'user:' . $id . ':v' . $version`).
+- **`Cache::flush()` drops the entire KV store, not just this
+  driver's prefix.** It calls the SAPI's `ephpm_kv_flush_all()`
+  (ePHPm v0.1.2+) — matching how Laravel's `RedisStore` flushes the
+  whole Redis database. Anything else living in the same KV store
+  (sessions, other prefixes) goes with it. On a pre-v0.1.2 runtime the
+  function is absent and `flush()` returns `false`; there, bump the
+  `prefix` in `config/cache.php` and let old keys age out via TTL.
 
 - **No tags.** `Cache::tags(['posts', 'comments'])->…` will throw
   `BadMethodCallException` because `EphpmStore` does not implement
@@ -352,9 +365,11 @@ through a real Redis store (`Cache::store('redis')->tags(...)`).
 
 ### `Cache::flush()` returns `false` and the cache isn't cleared
 
-This is by design — see [Limitations](#supported-behavior-and-limitations).
-Bump the `prefix` in `config/cache.php` to force a clean namespace,
-or rely on TTLs.
+Your ePHPm runtime predates v0.1.2, which added the
+`ephpm_kv_flush_all()` SAPI function that backs `flush()`. Upgrade
+ePHPm (current release: v0.8.6); on an old runtime you can bump the
+`prefix` in `config/cache.php` to force a clean namespace, or rely on
+TTLs.
 
 ### Cache values gone after `ephpm serve` restart
 
