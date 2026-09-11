@@ -37,6 +37,17 @@ final class InMemoryKvOps implements KvOpsInterface
         return true;
     }
 
+    public function setnx(string $key, string $value, int $ttlSeconds = 0): bool
+    {
+        // Insert-only: mirror the SAPI's atomic setnx. A live key blocks the
+        // write and returns false; an expired key is treated as absent (lazy
+        // expiry) so it can be re-acquired.
+        if ($this->liveValue($key) !== null) {
+            return false;
+        }
+        return $this->set($key, $value, $ttlSeconds);
+    }
+
     public function del(string $key): int
     {
         if ($this->liveValue($key) === null) {

@@ -43,7 +43,7 @@ path a Rust handler would take.
 - **PHP 8.2+**
 - **Laravel 10.x, 11.x, or 12.x** (`illuminate/contracts` and
   `illuminate/support` constraints are `^10.0 || ^11.0 || ^12.0`).
-- **The ePHPm runtime, v0.1.2 or newer** (current release: v0.8.6).
+- **The ePHPm runtime, v0.1.2 or newer** (current release: v0.10.2).
   The `ephpm_kv_*` SAPI functions have shipped since ePHPm v0.1.0, but
   `ephpm_kv_flush_all()` — which backs `Cache::flush()` — arrived in
   v0.1.2. The functions are
@@ -220,6 +220,48 @@ Cache::decrement('hits:home', 2);      // 4
 The counter ops use the SAPI's atomic `ephpm_kv_incr_by` — no
 read-modify-write race even under concurrent requests.
 
+### Atomic locks
+
+`EphpmStore` implements `Illuminate\Contracts\Cache\LockProvider`, so
+Laravel's atomic-lock API works — and anything built on it (scheduled
+task `withoutOverlapping()`, `Bus::batch()` coordination, your own
+critical sections):
+
+```php
+use Illuminate\Support\Facades\Cache;
+
+$lock = Cache::store('ephpm')->lock('processing:report', 10);
+
+if ($lock->get()) {
+    // Only one process reaches here at a time.
+    try {
+        // … do the exclusive work …
+    } finally {
+        $lock->release();
+    }
+}
+
+// Or scope it to a closure — auto-released even on exception:
+Cache::lock('processing:report', 10)->get(function () {
+    // … exclusive work …
+});
+```
+
+**Acquisition is genuinely atomic** — it routes through the SAPI's
+`ephpm_kv_setnx`, whose insert-or-fail runs under the KV store's
+per-shard lock, so exactly one contended caller wins.
+
+**Release is best-effort, not fenced.** The ePHPm SAPI currently has no
+compare-and-delete / CAS primitive, so — exactly like Laravel's own
+`MemcachedLock` — `release()` reads the owner token and then deletes in
+two separate steps rather than one atomic check-and-delete. There is a
+narrow window in which a lock whose TTL just expired and was re-acquired
+by another owner could be released by the previous holder. **Always set
+a TTL** (the second argument) so a crashed owner cannot wedge the lock
+forever, and do not treat this lock as a hard mutual-exclusion / fencing
+token for correctness-critical sections. A fully fenced implementation
+is gated on a future CAS SAPI primitive.
+
 ### Multi-store apps
 
 ```php
@@ -292,6 +334,8 @@ If this round-trips successfully you've confirmed:
 | `Cache::many`, `Cache::putMany`     | yes (loops `get`/`put`) |
 | `Cache::has`, `Cache::missing`      | yes                |
 | `Cache::add`                        | yes (via `Repository`) |
+| `Cache::lock`, `Cache::store('ephpm')->lock(...)` | yes (atomic acquire; best-effort release — see below) |
+| Cache events (`CacheHit`, `KeyWritten`, …) | yes (dispatcher attached) |
 | `Cache::flush` / `artisan cache:clear` | yes (ePHPm v0.1.2+, via `ephpm_kv_flush_all()`) |
 | `RateLimiter` / throttle middleware | yes                |
 | Session driver = `cache` (with this store as default) | yes  |
@@ -367,7 +411,7 @@ through a real Redis store (`Cache::store('redis')->tags(...)`).
 
 Your ePHPm runtime predates v0.1.2, which added the
 `ephpm_kv_flush_all()` SAPI function that backs `flush()`. Upgrade
-ePHPm (current release: v0.8.6); on an old runtime you can bump the
+ePHPm (current release: v0.10.2); on an old runtime you can bump the
 `prefix` in `config/cache.php` to force a clean namespace, or rely on
 TTLs.
 
@@ -385,9 +429,9 @@ data.
 ePHPm runs PHP inside the same OS process as the KV store via the
 embed SAPI. The store itself is a Rust [`DashMap`](https://docs.rs/dashmap/)
 plus TTL management. ePHPm registers a small set of host functions
-(`ephpm_kv_get`, `ephpm_kv_set`, `ephpm_kv_incr_by`, `ephpm_kv_expire`,
-`ephpm_kv_ttl`, `ephpm_kv_pttl`, `ephpm_kv_del`, `ephpm_kv_exists`)
-into PHP's global function table. Calling one is a direct C function
+(`ephpm_kv_get`, `ephpm_kv_set`, `ephpm_kv_setnx`, `ephpm_kv_incr_by`,
+`ephpm_kv_expire`, `ephpm_kv_ttl`, `ephpm_kv_pttl`, `ephpm_kv_del`,
+`ephpm_kv_exists`) into PHP's global function table. Calling one is a direct C function
 call into Rust — no socket, no protocol parser, no value serialization
 beyond what userland code already does.
 

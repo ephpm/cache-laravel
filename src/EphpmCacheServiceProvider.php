@@ -31,7 +31,16 @@ final class EphpmCacheServiceProvider extends ServiceProvider
         // "Target class [cache] does not exist".
         Cache::extend('ephpm', function ($app, array $config): Repository {
             $store = new EphpmStore($config['prefix'] ?? '');
-            return new Repository($store);
+
+            // Build the Repository through the cache manager, not with
+            // `new Repository($store)` directly. The manager's repository()
+            // attaches the framework event dispatcher, so CacheHit,
+            // CacheMissed, KeyWritten and KeyForgotten events fire for this
+            // store just like they do for redis/memcached. A bare
+            // `new Repository($store)` has no dispatcher, silently dropping
+            // every cache event (breaking telemetry, cache-event listeners,
+            // and Telescope's cache tab).
+            return $app['cache']->repository($store);
         });
     }
 }

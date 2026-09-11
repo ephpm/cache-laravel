@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Ephpm\Cache\Laravel;
 
+use Illuminate\Contracts\Cache\Lock;
+use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\Store;
 
 /**
@@ -15,8 +17,14 @@ use Illuminate\Contracts\Cache\Store;
  * Serialization mirrors Laravel's RedisStore: numeric values are stored
  * as their string representation so atomic counter ops keep working,
  * everything else is PHP-serialized.
+ *
+ * Implements {@see LockProvider}, so `Cache::store('ephpm')->lock(...)`,
+ * `Cache::lock(...)`, and features built on atomic locks (job overlap
+ * prevention, scheduled-task de-duplication) work. Acquisition is atomic
+ * via `ephpm_kv_setnx`; release is best-effort because the SAPI has no
+ * compare-and-delete — see {@see EphpmLock} for the full limitation.
  */
-final class EphpmStore implements Store
+final class EphpmStore implements LockProvider, Store
 {
     private KvOpsInterface $ops;
 
@@ -130,6 +138,33 @@ final class EphpmStore implements Store
     public function getPrefix(): string
     {
         return $this->prefix;
+    }
+
+    /**
+     * Get a lock instance. Atomic acquisition via `ephpm_kv_setnx`; the lock
+     * key is prefixed with this store's prefix so locks share the tenant/env
+     * namespace with cached values.
+     *
+     * @param string      $name
+     * @param int         $seconds TTL in seconds; 0 means no expiry
+     * @param string|null $owner
+     */
+    public function lock($name, $seconds = 0, $owner = null): Lock
+    {
+        return new EphpmLock($this->ops, $this->prefix . $name, (int) $seconds, $owner);
+    }
+
+    /**
+     * Restore a lock instance using the owner identifier, so a lock acquired
+     * in one request can be released in another (Laravel's
+     * `Cache::restoreLock(...)` flow).
+     *
+     * @param string $name
+     * @param string $owner
+     */
+    public function restoreLock($name, $owner): Lock
+    {
+        return $this->lock($name, 0, $owner);
     }
 
     /**
