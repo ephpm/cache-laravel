@@ -51,6 +51,35 @@ final class InMemoryKvOpsTest extends TestCase
         self::assertSame('4', $ops->get('hits'));
     }
 
+    public function test_setnx_inserts_only_when_absent(): void
+    {
+        $ops = new InMemoryKvOps();
+        self::assertTrue($ops->setnx('lock', 'owner-1'));
+        // A live key blocks a second insert and leaves the value untouched.
+        self::assertFalse($ops->setnx('lock', 'owner-2'));
+        self::assertSame('owner-1', $ops->get('lock'));
+    }
+
+    public function test_setnx_applies_ttl(): void
+    {
+        $ops = new InMemoryKvOps();
+        self::assertTrue($ops->setnx('lock', 'owner-1', 30));
+        $pttl = $ops->pttl('lock');
+        self::assertGreaterThan(0, $pttl);
+        self::assertLessThanOrEqual(30_000, $pttl);
+    }
+
+    public function test_setnx_can_reinsert_after_expiry(): void
+    {
+        $ops = new InMemoryKvOps();
+        self::assertTrue($ops->setnx('lock', 'owner-1', 1));
+        self::assertFalse($ops->setnx('lock', 'owner-2'));
+        \usleep(1_100_000);
+        // Once the TTL lapses the key is absent again and can be re-taken.
+        self::assertTrue($ops->setnx('lock', 'owner-2'));
+        self::assertSame('owner-2', $ops->get('lock'));
+    }
+
     public function test_incr_throws_on_non_integer_value(): void
     {
         $ops = new InMemoryKvOps();

@@ -7,8 +7,12 @@ namespace Ephpm\Cache\Laravel\Tests;
 use Ephpm\Cache\Laravel\EphpmCacheServiceProvider;
 use Ephpm\Cache\Laravel\EphpmStore;
 use Ephpm\Cache\Laravel\InMemoryKvOps;
+use Illuminate\Cache\Events\CacheHit;
+use Illuminate\Cache\Events\CacheMissed;
+use Illuminate\Cache\Events\KeyWritten;
 use Illuminate\Cache\Repository;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Event;
 use Orchestra\Testbench\TestCase;
 use PHPUnit\Framework\Attributes\CoversClass;
 
@@ -127,6 +131,40 @@ final class EphpmStoreTest extends TestCase
         $back = $store->get('hits');
         self::assertSame(4, $back);
         self::assertIsInt($back);
+    }
+
+    public function test_increment_throws_when_stored_value_is_not_an_integer(): void
+    {
+        // Guards the shared incrBy() bug: the SAPI returns false for a
+        // non-integer value and a naive `(int) false === 0` would swallow it.
+        // The contract is to throw; the store must propagate that.
+        $ops = new InMemoryKvOps();
+        $ops->set('label', 'not-a-number');
+        $store = new EphpmStore('', $ops);
+
+        $this->expectException(\RuntimeException::class);
+        $store->increment('label');
+    }
+
+    public function test_repository_built_through_manager_dispatches_cache_events(): void
+    {
+        // The service provider registers the store via
+        // `$this->app['cache']->repository($store)` so the event dispatcher is
+        // attached and cache events fire. Exercise that exact construction
+        // path with the in-memory backend (no SAPI needed) and assert the
+        // events land.
+        Event::fake([KeyWritten::class, CacheHit::class, CacheMissed::class]);
+
+        $store = new EphpmStore('', new InMemoryKvOps());
+        $repo = $this->app['cache']->repository($store);
+
+        $repo->put('k', 'v', 60);
+        $repo->get('k');
+        $repo->get('absent');
+
+        Event::assertDispatched(KeyWritten::class);
+        Event::assertDispatched(CacheHit::class);
+        Event::assertDispatched(CacheMissed::class);
     }
 
     public function test_many_returns_array_with_null_for_misses(): void
