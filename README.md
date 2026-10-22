@@ -46,7 +46,12 @@ path a Rust handler would take.
 - **The ePHPm runtime, v0.1.2 or newer** (current release: v0.10.2).
   The `ephpm_kv_*` SAPI functions have shipped since ePHPm v0.1.0, but
   `ephpm_kv_flush_all()` — which backs `Cache::flush()` — arrived in
-  v0.1.2. The functions are
+  v0.1.2. Newer runtimes make some paths faster or safer, each
+  feature-detected with `function_exists()` (older runtimes keep the
+  original behavior): `ephpm_kv_del_if_eq` (v0.11+) makes lock release
+  atomic, and `ephpm_kv_mget` / `ephpm_kv_mset` / `ephpm_kv_set_if_eq`
+  (v0.13+) back `Cache::many` / `Cache::putMany` with one call each and
+  enable `$lock->refresh()`. The functions are
   registered by ePHPm's embedded PHP. If you're running your code
   under PHP-FPM, Apache mod_php, or the stock PHP CLI, those functions
   don't exist and `SapiKvOps::__construct()` throws on instantiation.
@@ -251,16 +256,27 @@ Cache::lock('processing:report', 10)->get(function () {
 `ephpm_kv_setnx`, whose insert-or-fail runs under the KV store's
 per-shard lock, so exactly one contended caller wins.
 
-**Release is best-effort, not fenced.** The ePHPm SAPI currently has no
-compare-and-delete / CAS primitive, so — exactly like Laravel's own
-`MemcachedLock` — `release()` reads the owner token and then deletes in
-two separate steps rather than one atomic check-and-delete. There is a
-narrow window in which a lock whose TTL just expired and was re-acquired
-by another owner could be released by the previous holder. **Always set
-a TTL** (the second argument) so a crashed owner cannot wedge the lock
-forever, and do not treat this lock as a hard mutual-exclusion / fencing
-token for correctness-critical sections. A fully fenced implementation
-is gated on a future CAS SAPI primitive.
+**Release is atomic on ePHPm v0.11+.** `release()` calls the SAPI's
+`ephpm_kv_del_if_eq`, which deletes the key only while it still holds
+this lock's owner token, in one step — the same guarantee as Laravel's
+`RedisLock`. On older runtimes (no `ephpm_kv_del_if_eq`) it falls back to
+the best-effort release Laravel's `MemcachedLock` uses: read the owner
+token, then delete — two steps, with a narrow window in which a lock whose
+TTL just expired and was re-acquired by another owner could be released
+by the previous holder.
+
+**Refresh (Laravel 12's `$lock->refresh($seconds = null)`) needs ePHPm
+v0.13+.** It extends the TTL through the compare-and-set
+`ephpm_kv_set_if_eq` only while this owner still holds the lock (returns
+`false` otherwise); `0` removes the expiry, `null` reuses the lock's
+original TTL — the `RedisLock` contract. On older runtimes it throws
+`RuntimeException('This lock driver does not support refreshing locks.')`,
+like Laravel's base lock.
+
+Either way this is a TTL lock: an owner that outlives its TTL has lost
+the lock. **Always set a TTL** (the second argument) so a crashed owner
+cannot wedge the lock forever, and do not treat it as a fencing token
+for correctness-critical sections.
 
 ### Multi-store apps
 
@@ -331,10 +347,10 @@ If this round-trips successfully you've confirmed:
 | `Cache::forever`                    | yes                |
 | `Cache::forget`                     | yes                |
 | `Cache::increment`, `Cache::decrement` | yes (atomic)    |
-| `Cache::many`, `Cache::putMany`     | yes (loops `get`/`put`) |
+| `Cache::many`, `Cache::putMany`     | yes — one `ephpm_kv_mget` / `ephpm_kv_mset` call on ePHPm v0.13+, a `get`/`put` loop on older runtimes |
 | `Cache::has`, `Cache::missing`      | yes                |
 | `Cache::add`                        | yes (via `Repository`) |
-| `Cache::lock`, `Cache::store('ephpm')->lock(...)` | yes (atomic acquire; best-effort release — see below) |
+| `Cache::lock`, `Cache::store('ephpm')->lock(...)` | yes (atomic acquire; atomic release on ePHPm v0.11+, best-effort before; `refresh()` on v0.13+ — see [Atomic locks](#atomic-locks)) |
 | Cache events (`CacheHit`, `KeyWritten`, …) | yes (dispatcher attached) |
 | `Cache::flush` / `artisan cache:clear` | yes (ePHPm v0.1.2+, via `ephpm_kv_flush_all()`) |
 | `RateLimiter` / throttle middleware | yes                |
@@ -389,7 +405,10 @@ assert($cache->get('foo') === 'bar');
 
 `InMemoryKvOps` is for tests only — values live in PHP arrays, there
 is no eviction policy, no memory limit, and TTL is best-effort lazy
-expiry. Don't use it in production.
+expiry. Don't use it in production. It implements the newer
+multi-key and compare-and-set operations too; pass a list of operation
+names to emulate an older ePHPm — `new InMemoryKvOps([])` behaves like a
+runtime with only the original functions.
 
 ---
 
@@ -431,7 +450,9 @@ embed SAPI. The store itself is a Rust [`DashMap`](https://docs.rs/dashmap/)
 plus TTL management. ePHPm registers a small set of host functions
 (`ephpm_kv_get`, `ephpm_kv_set`, `ephpm_kv_setnx`, `ephpm_kv_incr_by`,
 `ephpm_kv_expire`, `ephpm_kv_ttl`, `ephpm_kv_pttl`, `ephpm_kv_del`,
-`ephpm_kv_exists`) into PHP's global function table. Calling one is a direct C function
+`ephpm_kv_exists`, plus `ephpm_kv_del_if_eq` on v0.11+ and
+`ephpm_kv_mget` / `ephpm_kv_mset` / `ephpm_kv_set_if_eq` on v0.13+) into
+PHP's global function table. Calling one is a direct C function
 call into Rust — no socket, no protocol parser, no value serialization
 beyond what userland code already does.
 

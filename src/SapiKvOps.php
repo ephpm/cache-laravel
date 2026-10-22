@@ -9,8 +9,12 @@ namespace Ephpm\Cache\Laravel;
  * the ePHPm SAPI. Refuses to construct if those functions aren't present
  * so we fail fast outside the runtime instead of producing
  * "Call to undefined function" errors at request time.
+ *
+ * The newer functions ({@see ExtendedKvOpsInterface}) are feature-detected
+ * one by one with `function_exists()` in {@see supports()}, so the store
+ * keeps working on older ePHPm runtimes.
  */
-final class SapiKvOps implements KvOpsInterface
+final class SapiKvOps implements ExtendedKvOpsInterface
 {
     public function __construct()
     {
@@ -86,5 +90,33 @@ final class SapiKvOps implements KvOpsInterface
             return false;
         }
         return (bool) \ephpm_kv_flush_all();
+    }
+
+    // ── newer functions: call only after supports() returned true ───────────
+
+    public function supports(string $op): bool
+    {
+        return \in_array($op, self::OPS, true) && \function_exists('ephpm_kv_' . $op);
+    }
+
+    public function mget(array $keys): array|false
+    {
+        /** @var list<string|null>|false */
+        return \ephpm_kv_mget($keys);
+    }
+
+    public function mset(array $values, int $ttlSeconds = 0): bool
+    {
+        return (bool) \ephpm_kv_mset($values, $ttlSeconds);
+    }
+
+    public function setIfEq(string $key, string $expected, string $value, int $ttlSeconds = 0): bool
+    {
+        return (bool) \ephpm_kv_set_if_eq($key, $expected, $value, $ttlSeconds);
+    }
+
+    public function delIfEq(string $key, string $expected): bool
+    {
+        return (bool) \ephpm_kv_del_if_eq($key, $expected);
     }
 }

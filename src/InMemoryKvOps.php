@@ -12,14 +12,77 @@ namespace Ephpm\Cache\Laravel;
  * TTL semantics match the SAPI: TTLs are stored as monotonic deadlines
  * in milliseconds; lazy expiry (a key is only "gone" when it's looked up
  * after its deadline). No background sweeper.
+ *
+ * Also implements the newer operations ({@see ExtendedKvOpsInterface}).
+ * Pass a list of operation names to the constructor to emulate an older
+ * ePHPm that lacks some of them — `[]` behaves like a runtime with only the
+ * original functions.
  */
-final class InMemoryKvOps implements KvOpsInterface
+final class InMemoryKvOps implements ExtendedKvOpsInterface
 {
     /** @var array<string, string> */
     private array $values = [];
 
     /** @var array<string, int> deadline in milliseconds since epoch */
     private array $deadlines = [];
+
+    /** @var list<string> */
+    private array $ops;
+
+    /**
+     * @param list<string>|null $ops operations to report as available (see
+     *                               {@see ExtendedKvOpsInterface::OPS});
+     *                               null = all of them
+     */
+    public function __construct(?array $ops = null)
+    {
+        $this->ops = $ops ?? self::OPS;
+    }
+
+    public function supports(string $op): bool
+    {
+        return \in_array($op, $this->ops, true);
+    }
+
+    public function mget(array $keys): array|false
+    {
+        $out = [];
+        foreach ($keys as $key) {
+            $out[] = $this->liveValue((string) $key);
+        }
+        return $out;
+    }
+
+    public function mset(array $values, int $ttlSeconds = 0): bool
+    {
+        foreach ($values as $key => $value) {
+            $this->set((string) $key, (string) $value, $ttlSeconds);
+        }
+        return true;
+    }
+
+    public function setIfEq(string $key, string $expected, string $value, int $ttlSeconds = 0): bool
+    {
+        if ($this->liveValue($key) !== $expected) {
+            return false;
+        }
+        $this->values[$key] = $value;
+        if ($ttlSeconds > 0) {
+            $this->deadlines[$key] = $this->nowMs() + ($ttlSeconds * 1000);
+        } elseif ($ttlSeconds === 0) {
+            unset($this->deadlines[$key]);
+        }
+        return true;
+    }
+
+    public function delIfEq(string $key, string $expected): bool
+    {
+        if ($this->liveValue($key) !== $expected) {
+            return false;
+        }
+        unset($this->values[$key], $this->deadlines[$key]);
+        return true;
+    }
 
     public function get(string $key): ?string
     {
