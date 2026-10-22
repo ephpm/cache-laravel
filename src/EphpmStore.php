@@ -21,8 +21,12 @@ use Illuminate\Contracts\Cache\Store;
  * Implements {@see LockProvider}, so `Cache::store('ephpm')->lock(...)`,
  * `Cache::lock(...)`, and features built on atomic locks (job overlap
  * prevention, scheduled-task de-duplication) work. Acquisition is atomic
- * via `ephpm_kv_setnx`; release is best-effort because the SAPI has no
- * compare-and-delete — see {@see EphpmLock} for the full limitation.
+ * via `ephpm_kv_setnx`; release is atomic via `ephpm_kv_del_if_eq` where the
+ * runtime has it and best-effort otherwise — see {@see EphpmLock}.
+ *
+ * On ePHPm v0.13+ {@see many()} and {@see putMany()} use the multi-key
+ * `ephpm_kv_mget` / `ephpm_kv_mset` (feature-detected; older runtimes keep
+ * the per-key loop).
  */
 final class EphpmStore implements LockProvider, Store
 {
@@ -51,6 +55,26 @@ final class EphpmStore implements LockProvider, Store
      */
     public function many(array $keys): array
     {
+        if ($keys === []) {
+            return [];
+        }
+
+        // ePHPm v0.13+: one ephpm_kv_mget call instead of one get per key.
+        if ($this->ops instanceof ExtendedKvOpsInterface && $this->ops->supports('mget')) {
+            $keys = \array_values($keys);
+            $values = $this->ops->mget(\array_map(fn ($key): string => $this->prefix . $key, $keys));
+            if (\is_array($values)) {
+                $result = [];
+                foreach ($keys as $i => $key) {
+                    $value = $values[$i] ?? null;
+                    $result[$key] = $value !== null ? $this->unserialize($value) : null;
+                }
+                return $result;
+            }
+            // false = the call failed as a whole; fall through so each key
+            // gets the per-key behavior it had before.
+        }
+
         $result = [];
         foreach ($keys as $key) {
             $result[$key] = $this->get($key);
@@ -78,6 +102,20 @@ final class EphpmStore implements LockProvider, Store
      */
     public function putMany(array $values, $seconds): bool
     {
+        if ($values === []) {
+            return true;
+        }
+
+        // ePHPm v0.13+: one ephpm_kv_mset call; Laravel gives every item the
+        // same TTL, which is exactly mset's contract.
+        if ($this->ops instanceof ExtendedKvOpsInterface && $this->ops->supports('mset')) {
+            $serialized = [];
+            foreach ($values as $key => $value) {
+                $serialized[$this->prefix . $key] = $this->serialize($value);
+            }
+            return $this->ops->mset($serialized, (int) max(1, $seconds));
+        }
+
         $ok = true;
         foreach ($values as $key => $value) {
             $ok = $this->put((string) $key, $value, $seconds) && $ok;
