@@ -43,7 +43,7 @@ path a Rust handler would take.
 - **PHP 8.2+**
 - **Laravel 10.x, 11.x, or 12.x** (`illuminate/contracts` and
   `illuminate/support` constraints are `^10.0 || ^11.0 || ^12.0`).
-- **The ePHPm runtime, v0.1.2 or newer** (current release: v0.10.2).
+- **The ePHPm runtime, v0.1.2 or newer** (see the [ePHPm releases](https://github.com/ephpm/ephpm/releases) for the latest version).
   The `ephpm_kv_*` SAPI functions have shipped since ePHPm v0.1.0, but
   `ephpm_kv_flush_all()` — which backs `Cache::flush()` — arrived in
   v0.1.2. Newer runtimes make some paths faster or safer, each
@@ -430,7 +430,7 @@ through a real Redis store (`Cache::store('redis')->tags(...)`).
 
 Your ePHPm runtime predates v0.1.2, which added the
 `ephpm_kv_flush_all()` SAPI function that backs `flush()`. Upgrade
-ePHPm (current release: v0.10.2); on an old runtime you can bump the
+ePHPm (see the [ePHPm releases](https://github.com/ephpm/ephpm/releases) for the latest version); on an old runtime you can bump the
 `prefix` in `config/cache.php` to force a clean namespace, or rely on
 TTLs.
 
