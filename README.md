@@ -73,12 +73,12 @@ refuse to construct.
 
 ePHPm packages are distributed via their GitHub repositories, not
 Packagist. Add this repo as a Composer `vcs` repository, then require
-the package (`ephpm/cache-laravel` is tagged `v0.1.0`, so `^0.1`
+the package (`ephpm/cache-laravel` is tagged `v0.2.0`, so `^0.2`
 resolves):
 
 ```bash
 composer config repositories.ephpm/cache-laravel vcs https://github.com/ephpm/cache-laravel
-composer require ephpm/cache-laravel:^0.1
+composer require ephpm/cache-laravel:^0.2
 ```
 
 Laravel package discovery picks up `EphpmCacheServiceProvider`
@@ -99,7 +99,7 @@ cache hit served from in-process memory.
 composer create-project laravel/laravel my-app
 cd my-app
 composer config repositories.ephpm/cache-laravel vcs https://github.com/ephpm/cache-laravel
-composer require ephpm/cache-laravel:^0.1
+composer require ephpm/cache-laravel:^0.2
 ```
 
 ### 2. Add an `ephpm` store to `config/cache.php`
